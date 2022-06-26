@@ -1,8 +1,29 @@
 Function Get-ADPrincipalKerberosTokenGroup {
+# By 1nTh35h311 @yossi_sassi | version: 1.0.1
 param (
     [cmdletbinding()]
     [string]$UserName
 )
+
+# first, check that user is Not disabled/lockedout (if True, then no use to even try to perform the check, cannot enum token)
+$Disabled = @();
+$Disabled += "514","546","66050";
+
+$userObj = ([adsisearcher]"(&(objectcategory=person)(objectclass=user)(samaccountname=$UserName))").FindOne();
+
+if ($userObj)
+    {
+        if ($userObj.Properties.lockouttime -ne 0 -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
+            {
+                Write-Warning "User account is either Locked or Disabled. Can only enumerate Token Groups for enabled/active users.`nQuiting.";
+                break
+            }
+    }
+else
+    {
+        Write-Warning "Could not find user: $UserName. Make sure you've spelled the name correctly.`nQuiting.";
+        break
+    }
 
 # Get user context
 $token = [System.Security.Principal.WindowsIdentity]::new($UserName);
