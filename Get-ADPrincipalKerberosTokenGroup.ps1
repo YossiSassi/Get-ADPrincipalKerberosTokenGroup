@@ -1,5 +1,5 @@
 Function Get-ADPrincipalKerberosTokenGroup {
-# By 1nTh35h311 @yossi_sassi | version: 1.0.1
+# By 1nTh35h311 @yossi_sassi | version: 1.0.2
 param (
     [cmdletbinding()]
     [string]$UserName
@@ -13,7 +13,7 @@ $userObj = ([adsisearcher]"(&(objectcategory=person)(objectclass=user)(samaccoun
 
 if ($userObj)
     {
-        if ($userObj.Properties.lockouttime -ne 0 -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
+        if ($userObj.Properties.lockouttime -ne $null -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
             {
                 Write-Warning "User account is either Locked or Disabled. Can only enumerate Token Groups for enabled/active users.`nQuiting.";
                 break
