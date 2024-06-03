@@ -1,16 +1,48 @@
 Function Get-ADPrincipalKerberosTokenGroup {
-# By 1nTh35h311 @yossi_sassi | version: 1.0.2
+<# 
+Comments to 1nTh35h311 @yossi_sassi
+Version: 1.0.3
+v1.0.3 - added support for other domains + minor error handling addition
+#>
 param (
     [cmdletbinding()]
-    [string]$UserName
+    [Parameter(Position=0,mandatory=$true)]
+    [string]$UserName,
+    [Parameter(Position=1)]
+    [string]$DomainDN = [System.String]::Empty,
+    [Parameter(Position=2)]
+    [string]$DomainController = [System.String]::Empty
 )
 
 # first, check that user is Not disabled/lockedout (if True, then no use to even try to perform the check, cannot enum token)
 $Disabled = @();
 $Disabled += "514","546","66050";
 
-$userObj = ([adsisearcher]"(&(objectcategory=person)(objectclass=user)(samaccountname=$UserName))").FindOne();
+if ($DomainDN -ne [System.String]::Empty)
+    {
+        if ($DomainController -eq [System.String]::Empty)
+            {
+                $DomainController = Read-Host "DomainController must be given when specifying a Domain DN.`nPlease enter the name of a DC in domain $DomainDN"
+            }
+        $de = [adsi]"LDAP://$DomainController/$DomainDN";
+        $ds = New-Object System.DirectoryServices.DirectorySearcher($de)
+    }
+else
+    {
+        $ds = New-Object System.DirectoryServices.DirectorySearcher
+    }
 
+$ds.Filter = "(&(objectcategory=person)(objectclass=user)(samaccountname=$UserName))";
+$userObj = $ds.FindOne()
+
+# Ensure connection is successful 
+if (!$?) 
+    {
+        Write-Warning "An error occured when connecting to the server. Ensure the domain & DC names are correct.`nQuiting.";
+        break
+    }
+
+# enum user token
 if ($userObj)
     {
         if ($userObj.Properties.lockouttime -ne $null -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
