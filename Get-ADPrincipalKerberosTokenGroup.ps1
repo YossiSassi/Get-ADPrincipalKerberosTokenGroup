@@ -1,7 +1,8 @@
 Function Get-ADPrincipalKerberosTokenGroup {
 <# 
-Comments to 1nTh35h311 @yossi_sassi
-Version: 1.0.3
+Comments to 1nTh35h311 (@yossi_sassi)
+Version: 1.0.4
+v1.0.4 - fixed an issue where a user wasn't locked out but the lockouttime attribute STILL had a value that prevented the script from running (moved to a WMI query instead)
 v1.0.3 - added support for other domains + minor error handling addition
 #>
 param (
@@ -33,7 +34,8 @@ else
     }
 
 $ds.Filter = "(&(objectcategory=person)(objectclass=user)(samaccountname=$UserName))";
-$userObj = $ds.FindOne()
+$ds.PropertiesToLoad.AddRange(@("lockouttime","useraccountcontrol"));
+$userObj = $ds.FindOne();
 
 # Ensure connection is successful 
 if (!$?) 
@@ -42,10 +44,15 @@ if (!$?)
         break
     }
 
+# Get current user's netbios Domain Name
+$DomainName = $env:USERDNSDOMAIN;
+
 # enum user token
 if ($userObj)
     {
-        if ($userObj.Properties.lockouttime -ne $null -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
+        $AccountLockedWMI  = Get-WmiObject -Namespace "root\cimv2" -Class Win32_UserAccount -Filter "name='$UserName' AND domain='$DomainName'" | select -ExpandProperty LockOut;
+        if ($AccountLockedWMI -eq $True -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
+        #if ($userObj.Properties.lockouttime -ne $null -xor $Disabled -contains $userObj.Properties.useraccountcontrol)
             {
                 Write-Warning "User account is either Locked or Disabled. Can only enumerate Token Groups for enabled/active users.`nQuiting.";
                 break
@@ -58,7 +65,13 @@ else
     }
 
 # Get user context
-$token = [System.Security.Principal.WindowsIdentity]::new($UserName);
+try {
+    $token = [System.Security.Principal.WindowsIdentity]::new($UserName)
+} catch {
+    # If an error was raised, don't continue enumerating token groups
+    Write-Warning "An error occured enumerating token for user: $($UserName.ToUpper()).`nMake sure account is Not Locked out.`nException: $($Error[0].Exception.InnerException.Message)`nQuiting.";
+    break
+}
 
 # Groups to exclude from the token
 $ExcludedGroups = 'Everyone','BUILTIN\Users','BUILTIN\Pre-Windows 2000 Compatible Access','BUILTIN\Certificate Service DCOM Access','NT AUTHORITY\NETWORK','NT AUTHORITY\Authenticated Users','NT AUTHORITY\This Organization','Service asserted identity';
