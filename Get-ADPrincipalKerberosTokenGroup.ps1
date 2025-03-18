@@ -1,7 +1,8 @@
 Function Get-ADPrincipalKerberosTokenGroup {
 <# 
 Comments to 1nTh35h311 (@yossi_sassi)
-Version: 1.0.6
+Version: 1.0.7
+v1.0.7 - Fixed an issue with multiple entries in sIDHistory + moved to a simpler long-binary/hex sid conversion function + Added a new property to reflect Object Class for sIDHistory + Changed property named to better reflect the content (e.g. samaccountname rather than group name, sIDType rather than accountType)
 v1.0.6 - added sidHistory conversion and indication where sidHistory is present on the account (possible excessive permission/backdoor/etc.)
 v1.0.5 - added a check for expired AD accounts + a new optional parameter to display all token groups, including generic default ones
 v1.0.4 - fixed an issue where a user wasn't locked out but the lockouttime attribute STILL had a value that prevented the script from running (moved to a WMI query instead)
@@ -102,32 +103,8 @@ Function Convert-HexSID
   param (
   $HexSID
   )
-  # Convert into normal array of bytes.
-  $strSID = "S-" + $HexSID[0]
-  $arrSID = $strSID.Split(" ")
-  $Max = $arrSID.Count
-  $DecSID = $arrSID[0] + "-" + $arrSID[1] + "-" + $arrSID[8]
-  If ($Max -eq 11)
-  {
-    Return $DecSID
-  }
-  $Temp1 = [Int64]$arrSID[12] + (256 * ([Int64]$arrSID[13] + (256 * ([Int64]$arrSID[14] + (256 * ([Int64]$arrSID[15]))))))
-  $DecSID = $DecSID + "-" + $($Temp1)
-  If ($Max -eq 15)
-  {
-    Return $DecSID
-  }
-  $Temp2 = [Int64]$arrSID[16] + (256 * ([Int64]$arrSID[17] + (256 * ([Int64]$arrSID[18] + (256 * ([Int64]$arrSID[19]))))))
-  $DecSID = $DecSID + "-" + $($Temp2)
-  $Temp3 = [Int64]$arrSID[20] + (256 * ([Int64]$arrSID[21] + (256 * ([Int64]$arrSID[22] + (256 * ([Int64]$arrSID[23]))))))
-  $DecSID = $DecSID + "-" + $($Temp3)
-  If ($Max -lt 24)
-  {
-    Return $DecSID
-  }
-  $Temp4 = [Int64]$arrSID[24] + (256 * ([Int64]$arrSID[25] + (256 * ([Int64]$arrSID[26] + (256 * ([Int64]$arrSID[27]))))))
-  $DecSID = $DecSID + "-" + $($Temp4)
-  Return $DecSID
+  $sid = New-Object System.Security.Principal.SecurityIdentifier($HexSID, 0);
+  return $sid.Value
 }
 
 # Get SIDs from Kerberos token
@@ -150,10 +127,12 @@ $groupSIDs | Foreach-Object {
                     else 
                         {
                         # Add group to enumerated groups collection
-                        Add-Member -InputObject $Obj -MemberType NoteProperty -Name GroupName -Value $Group.Value -Force;
-                        # Get AccountType
-                        if ($_.AccountDomainSid -eq $null) {$AccountType="Local"} else {$AccountType="Domain"}
-                        Add-Member -InputObject $Obj -MemberType NoteProperty -Name AccountType -Value $AccountType -Force;
+                        Add-Member -InputObject $Obj -MemberType NoteProperty -Name SamAccountName -Value $Group.Value -Force;
+                        # Set Object class to group
+                        Add-Member -InputObject $Obj -MemberType NoteProperty -Name ObjectClass -Value "Group" -Force;
+                        # Get Sid Type
+                        if ($_.AccountDomainSid -eq $null) {$sIDType="Local"} else {$sIDType="Domain"}
+                        Add-Member -InputObject $Obj -MemberType NoteProperty -Name sIDType -Value $sIDType -Force;
                         $EnumeratedGroups.Add($Obj) | Out-Null;
                     }
             }
@@ -166,16 +145,18 @@ $groupSIDs | Foreach-Object {
 
             finally
             {
-                Clear-Variable AccountType, Obj, Group
+                Clear-Variable sIDType, Obj, Group
             }
         }
 
     # Handle SidHistory, IF it applicable
-    $sidHistoryValue = Convert-HexSID -HexSID $userObj.Properties.sidhistory -ErrorAction SilentlyContinue;
-    if ($sidHistoryValue -ne "---")
+    if ($userObj.Properties.sidhistory -ne $null) 
         {
-                Write-Warning "[!] SidHistory is present on this account.";
-                $sidHistoryObj = [adsi]"LDAP://<SID=$sidHistoryValue>";
+            $sidHistoryValue =  $userObj.Properties.sidhistory | ForEach-Object {Convert-HexSID -HexSID $_ -ErrorAction SilentlyContinue}
+            Write-Warning "[!] SidHistory is present on this account.";
+            $sidHistoryValue | ForEach-Object {
+                $sidHistoryCurrentValue = $_;
+                $sidHistoryObj = [adsi]"LDAP://<SID=$sidHistoryCurrentValue>";
                 $sidHistoryAccountName = "$env:USERDOMAIN\$($sidHistoryObj.Properties.samaccountname)";
                 # remove duplicate account from token enum array
                 $EnumeratedGroups | foreach {if ($_.GroupName -eq $sidHistoryAccountName) {$DuplicateGroupToRemove = $_}};
@@ -184,17 +165,29 @@ $groupSIDs | Foreach-Object {
                 # Ensure we got a valid account (existing domain) for sidHistory. otherwise, display Sid
                 if ($sidHistoryAccountName -eq "$env:USERDOMAIN\") 
                     {
-                        $sidHistoryAccountName = $sidHistoryValue;
-                        $sidHistoryAccountType = "!SidHistory_Unresolved!"
+                        $sidHistoryAccountName = $sidHistoryCurrentValue;
+                        $sidHistoryType = "!SidHistory_Unresolved!"
                     }
                 else
                     {
-                        $sidHistoryAccountType = "!SidHistory!"
-                    }
+                        $sidHistoryType = "!SidHistory!"
+                    } 
 
-                Add-Member -InputObject $Obj -MemberType NoteProperty -Name GroupName -Value $sidHistoryAccountName -Force;
-                Add-Member -InputObject $Obj -MemberType NoteProperty -Name AccountType -Value $sidHistoryAccountType -Force;
-                $EnumeratedGroups.Add($Obj) | Out-Null;
+                # Set object class - ignore if sID invalid / unresolved
+                if ($sidHistoryType -eq "!SidHistory_Unresolved!")
+                    {
+                        $ObjectClass = "Unresolved"
+                    }
+                else
+                    {
+                        $ObjectClass = ($sidHistoryObj.Properties.objectcategory).ToString().split(",")[0].replace("CN=","");
+                    }
+                
+                Add-Member -InputObject $Obj -MemberType NoteProperty -Name SamAccountName -Value $sidHistoryAccountName -Force;
+                Add-Member -InputObject $Obj -MemberType NoteProperty -Name ObjectClass -Value $ObjectClass -Force;
+                Add-Member -InputObject $Obj -MemberType NoteProperty -Name sIDType -Value $sidHistoryType -Force;
+                $EnumeratedGroups.Add($Obj) | Out-Null
+            }
         }
 
     # write output
