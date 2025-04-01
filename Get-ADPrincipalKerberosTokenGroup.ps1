@@ -169,14 +169,16 @@ else
     {
         $AccountObj.Properties.memberof | ForEach-Object { 
             $GroupName = ([adsi]"LDAP://$_").Properties.samaccountname | Out-String;
-            $obj = New-Object psobject;
-            Add-Member -InputObject $Obj -MemberType NoteProperty -Name SamAccountName -Value $GroupName.Trim() -Force;
-            # Set Object class to group
-            Add-Member -InputObject $Obj -MemberType NoteProperty -Name ObjectClass -Value "Group" -Force;
-            # Set Sid Type to Domain
-            Add-Member -InputObject $Obj -MemberType NoteProperty -Name sIDType -Value "Domain" -Force;
-            $EnumeratedGroups.Add($Obj) | Out-Null;
-            Clear-Variable obj, GroupName
+            if ($groupname.trim() -ne [System.String]::Empty) {
+                $obj = New-Object psobject;
+                Add-Member -InputObject $Obj -MemberType NoteProperty -Name SamAccountName -Value "$env:USERDOMAIN\$($GroupName.Trim())" -Force;
+                # Set Object class to group
+                Add-Member -InputObject $Obj -MemberType NoteProperty -Name ObjectClass -Value "Group" -Force;
+                # Set Sid Type to Domain
+                Add-Member -InputObject $Obj -MemberType NoteProperty -Name sIDType -Value "Domain" -Force;
+                $EnumeratedGroups.Add($Obj) | Out-Null
+            }
+            Clear-Variable obj, GroupName -ErrorAction SilentlyContinue
         }
     }
 
